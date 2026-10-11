@@ -145,9 +145,16 @@ def admin_keyboard():
 @bot.chat_join_request_handler()
 def handle_join_request(request):
     try:
-        # User request pathale bot automatic approve kore nibe (Advance feature)
+        user_id = str(request.from_user.id)
+        # Approve the join request instantly
         bot.approve_chat_join_request(request.chat.id, request.from_user.id)
-        # Verify status database a update kora jete pare ekhane, but nicher verify button e cover hobe
+        
+        # MAGIC FIX: Bot ekhane nije thekei user ke Verified baniye welcome message pathiye dibe!
+        if user_id in db["users"]:
+            db["users"][user_id]["verified"] = True
+            save_data()
+            bot.send_message(request.from_user.id, "✅ <b>Your join request was approved!</b>", parse_mode="HTML")
+            bot.send_message(request.from_user.id, db["welcome_text"], reply_markup=user_main_keyboard(), parse_mode="HTML")
     except Exception as e:
         print(f"Auto-approve error: {e}")
 
@@ -189,7 +196,9 @@ def check_force_join(message):
     # Check channels
     for ch in db["channels"]:
         try:
-            status = bot.get_chat_member(ch['id'], user_id).status
+            # Force Integer cast for chat_id to fix pyTelegramBotAPI String Issue
+            chat_id_int = int(ch['id']) 
+            status = bot.get_chat_member(chat_id_int, user_id).status
             if status not in ['member', 'administrator', 'creator']:
                 not_joined.append(ch['link'])
         except Exception as e:
@@ -201,7 +210,7 @@ def check_force_join(message):
         for i, link in enumerate(not_joined):
             markup.add(InlineKeyboardButton(f"Join Channel {i+1}", url=link))
         markup.add(InlineKeyboardButton("✅ Verify", callback_data="verify_join"))
-        bot.send_message(user_id, "⚠️ <b>Please join our channels to use this bot!</b>\n<i>Send join request and click Verify.</i>", reply_markup=markup, parse_mode="HTML")
+        bot.send_message(user_id, "⚠️ <b>Please join our channels to use this bot!</b>\n<i>Send join request and wait, or click Verify.</i>", reply_markup=markup, parse_mode="HTML")
     else:
         db["users"][str(user_id)]["verified"] = True
         save_data()
@@ -210,11 +219,19 @@ def check_force_join(message):
 @bot.callback_query_handler(func=lambda call: call.data == "verify_join")
 def verify_join_callback(call):
     user_id = call.message.chat.id
-    not_joined = []
+    
+    # Jodi Auto-Approve theke aage thekei Verified hoye thake tahole r check korbe na
+    if db["users"].get(str(user_id), {}).get("verified"):
+        bot.delete_message(call.message.chat.id, call.message.message_id)
+        bot.answer_callback_query(call.id, "✅ Verified successfully!")
+        bot.send_message(user_id, db["welcome_text"], reply_markup=user_main_keyboard(), parse_mode="HTML")
+        return
 
+    not_joined = []
     for ch in db["channels"]:
         try:
-            status = bot.get_chat_member(ch['id'], user_id).status
+            chat_id_int = int(ch['id']) # Force Integer cast
+            status = bot.get_chat_member(chat_id_int, user_id).status
             if status not in ['member', 'administrator', 'creator']:
                 not_joined.append(ch['link'])
         except Exception as e:
@@ -222,7 +239,7 @@ def verify_join_callback(call):
             not_joined.append(ch['link'])
             
     if not_joined:
-        bot.answer_callback_query(call.id, "❌ You haven't joined the channels yet! If you sent a request, wait a moment and try again.", show_alert=True)
+        bot.answer_callback_query(call.id, "❌ Not joined yet! If you just sent a request, please wait 5-10 seconds.", show_alert=True)
     else:
         bot.delete_message(call.message.chat.id, call.message.message_id)
         db["users"][str(user_id)]["verified"] = True
@@ -543,7 +560,6 @@ def add_videos(message):
         db["premium_videos"].append({'type': message.content_type, 'file_id': file_id, 'caption': caption})
         save_data()
         bot.send_message(chat_id, "✅ Premium Post Added! Send next or type /stop")
-
 
 # ================= START BOT =================
 if __name__ == "__main__":
