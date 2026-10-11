@@ -7,8 +7,6 @@ import json
 import os
 import re
 import imaplib
-import email
-from datetime import datetime
 
 # ================= CONFIGURATION =================
 BOT_TOKEN = "8937677864:AAHy-2OCC12N1yxhPf8gXIbhcIIoBJ0XgsM"
@@ -24,7 +22,7 @@ default_data = {
     "channels": [], 
     "refer_target": 5,
     "payment": {"email": "", "password": "", "upi": "", "price": "150"},
-    "welcome_text": "<b>Welcome to our Bot! You are now verified.</b>",
+    "welcome_text": "<b>Welcome to our Bot! Enjoy your stay.</b>",
     "normal_videos": [], 
     "premium_videos": [],
     "auto_post_channel_id": None
@@ -138,7 +136,7 @@ def admin_keyboard():
     )
     return markup
 
-# ================= AUTO APPROVE =================
+# ================= AUTO APPROVE JOIN REQUESTS =================
 @bot.chat_join_request_handler()
 def handle_join_request(request):
     try:
@@ -149,50 +147,52 @@ def handle_join_request(request):
             db["users"][user_id] = {"premium": False, "refers": 0, "normal_index": 0, "premium_index": 0, "verified": True}
         else:
             db["users"][user_id]["verified"] = True
-            
         save_data()
+        
         bot.send_message(request.from_user.id, "✅ <b>Your join request was approved!</b>", parse_mode="HTML")
         bot.send_message(request.from_user.id, db["welcome_text"], reply_markup=user_main_keyboard(), parse_mode="HTML")
     except:
         pass
 
-# ================= VERIFICATION SYSTEM =================
+# ================= /START & FORCE JOIN =================
 @bot.message_handler(commands=['start'])
 def start(message):
     user_id = str(message.chat.id)
     
+    # Referral handling
     if len(message.text.split()) > 1:
         ref_id = message.text.split()[1]
         if ref_id != user_id and user_id not in db["users"]:
             if ref_id in db["users"]:
                 db["users"][ref_id]["refers"] += 1
                 save_data()
-                bot.send_message(ref_id, f"🎉 <b>New user joined using your link!</b>\nTotal Refers: {db['users'][ref_id]['refers']}/{db['refer_target']}", parse_mode="HTML")
-                if db["users"][ref_id]["refers"] >= db["refer_target"] and not db["users"][ref_id]["premium"]:
-                    db["users"][ref_id]["premium"] = True
-                    save_data()
-                    bot.send_message(ref_id, "🥳 <b>Congratulations! You unlocked PREMIUM!</b>", parse_mode="HTML")
+                try:
+                    bot.send_message(ref_id, f"🎉 <b>New user joined using your link!</b>\nTotal Refers: {db['users'][ref_id]['refers']}/{db['refer_target']}", parse_mode="HTML")
+                    if db["users"][ref_id]["refers"] >= db["refer_target"] and not db["users"][ref_id]["premium"]:
+                        db["users"][ref_id]["premium"] = True
+                        save_data()
+                        bot.send_message(ref_id, "🥳 <b>Congratulations! You unlocked PREMIUM!</b>", parse_mode="HTML")
+                except:
+                    pass
     
     if user_id not in db["users"]:
         db["users"][user_id] = {"premium": False, "refers": 0, "normal_index": 0, "premium_index": 0, "verified": False}
         save_data()
 
-    check_force_join(message)
-
-def check_force_join(message):
-    user_id = message.chat.id
-    not_joined = []
-    
-    if str(user_id) == str(ADMIN_ID):
-        db["users"][str(user_id)]["verified"] = True
+    # Admin Bypass
+    if user_id == str(ADMIN_ID):
+        db["users"][user_id]["verified"] = True
         save_data()
-        bot.send_message(user_id, db["welcome_text"], reply_markup=user_main_keyboard(), parse_mode="HTML")
+        bot.send_message(message.chat.id, db["welcome_text"], reply_markup=user_main_keyboard(), parse_mode="HTML")
         return
 
+    check_channels_and_proceed(message.chat.id)
+
+def check_channels_and_proceed(chat_id):
+    not_joined = []
     for ch in db["channels"]:
         try:
-            chat_id_int = int(ch['id']) 
-            status = bot.get_chat_member(chat_id_int, user_id).status
+            status = bot.get_chat_member(int(ch['id']), chat_id).status
             if status not in ['member', 'administrator', 'creator']:
                 not_joined.append(ch['link'])
         except:
@@ -203,51 +203,43 @@ def check_force_join(message):
         for i, link in enumerate(not_joined):
             markup.add(InlineKeyboardButton(f"Join Channel {i+1}", url=link))
         markup.add(InlineKeyboardButton("✅ Verify", callback_data="verify_join"))
-        bot.send_message(user_id, "⚠️ <b>Please join our channels to use this bot!</b>\n<i>Send join request and wait, or click Verify.</i>", reply_markup=markup, parse_mode="HTML")
+        bot.send_message(chat_id, "⚠️ <b>Please join our channels to use this bot!</b>\n<i>Send join request and click Verify.</i>", reply_markup=markup, parse_mode="HTML")
     else:
-        db["users"][str(user_id)]["verified"] = True
+        db["users"][str(chat_id)]["verified"] = True
         save_data()
-        bot.send_message(user_id, db["welcome_text"], reply_markup=user_main_keyboard(), parse_mode="HTML")
+        bot.send_message(chat_id, db["welcome_text"], reply_markup=user_main_keyboard(), parse_mode="HTML")
 
 @bot.callback_query_handler(func=lambda call: call.data == "verify_join")
 def verify_join_callback(call):
-    user_id = call.message.chat.id
+    chat_id = call.message.chat.id
     
-    if db["users"].get(str(user_id), {}).get("verified"):
-        try:
-            bot.delete_message(call.message.chat.id, call.message.message_id)
-        except: pass
-        bot.answer_callback_query(call.id, "✅ Already Verified!")
-        bot.send_message(user_id, db["welcome_text"], reply_markup=user_main_keyboard(), parse_mode="HTML")
-        return
-
     not_joined = []
     for ch in db["channels"]:
         try:
-            status = bot.get_chat_member(int(ch['id']), user_id).status
+            status = bot.get_chat_member(int(ch['id']), chat_id).status
             if status not in ['member', 'administrator', 'creator']:
                 not_joined.append(ch['link'])
         except:
             not_joined.append(ch['link'])
             
     if not_joined:
-        bot.answer_callback_query(call.id, "❌ Not joined yet! If you just sent a request, please wait 5-10 seconds.", show_alert=True)
+        bot.answer_callback_query(call.id, "❌ Not joined yet! Please join the channels and try again.", show_alert=True)
     else:
         try:
-            bot.delete_message(call.message.chat.id, call.message.message_id)
-        except: pass
-        db["users"][str(user_id)]["verified"] = True
+            bot.delete_message(chat_id, call.message.message_id)
+        except:
+            pass
+        db["users"][str(chat_id)]["verified"] = True
         save_data()
         bot.answer_callback_query(call.id, "✅ Verified successfully!")
-        bot.send_message(user_id, db["welcome_text"], reply_markup=user_main_keyboard(), parse_mode="HTML")
+        bot.send_message(chat_id, db["welcome_text"], reply_markup=user_main_keyboard(), parse_mode="HTML")
 
-# ================= USER FEATURES =================
-# Ekhane emoji problem solve kora hoyeche 'in' use kore
+# ================= USER BUTTON HANDLERS =================
 @bot.message_handler(func=lambda msg: msg.text and "GET VIDEO" in msg.text.upper())
 def send_normal_video(message):
     user_id = str(message.chat.id)
     if not db["users"].get(user_id, {}).get("verified"):
-        return check_force_join(message)
+        return check_channels_and_proceed(message.chat.id)
         
     videos = db["normal_videos"]
     if not videos:
@@ -276,7 +268,7 @@ def send_normal_video(message):
 def get_premium(message):
     user_id = str(message.chat.id)
     if not db["users"].get(user_id, {}).get("verified"):
-        return check_force_join(message)
+        return check_channels_and_proceed(message.chat.id)
 
     if db["users"].get(user_id, {}).get("premium"):
         videos = db["premium_videos"]
@@ -308,7 +300,7 @@ def get_premium(message):
 def buy_premium_callback(call):
     upi = db["payment"]["upi"]
     if not upi:
-        bot.answer_callback_query(call.id, "Payment not configured.", show_alert=True)
+        bot.answer_callback_query(call.id, "Payment not configured by admin.", show_alert=True)
         return
         
     qr_url = f"https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=upi://pay?pa={upi}%26pn=Admin"
@@ -328,13 +320,13 @@ def process_utr(message):
         bot.edit_message_text("✅ <b>Payment Approved! PREMIUM UNLOCKED!</b> 🥳", chat_id, msg_load.message_id, parse_mode="HTML")
         user_states.pop(chat_id, None)
     else:
-        bot.edit_message_text("❌ <b>Payment not found or UTR invalid!</b> Please try again.", chat_id, msg_load.message_id, parse_mode="HTML")
+        bot.edit_message_text("❌ <b>Payment not found or UTR invalid!</b> Please check and try again.", chat_id, msg_load.message_id, parse_mode="HTML")
 
 @bot.message_handler(func=lambda msg: msg.text and "REFER" in msg.text.upper())
 def refer_system(message):
     user_id = str(message.chat.id)
     if not db["users"].get(user_id, {}).get("verified"):
-        return check_force_join(message)
+        return check_channels_and_proceed(message.chat.id)
 
     bot_info = bot.get_me()
     ref_link = f"https://t.me/{bot_info.username}?start={user_id}"
@@ -344,7 +336,7 @@ def refer_system(message):
     msg = f"🎁 <b>Refer & Earn Premium!</b>\n\nInvite friends and get premium for FREE!\n\n<b>Your Points:</b> {refers}/{target}\n<b>Your Link:</b> <code>{ref_link}</code>\n\n<i>Share this link with your friends. Once they verify, you get 1 point!</i>"
     bot.send_message(message.chat.id, msg, parse_mode="HTML")
 
-# ================= ADMIN HANDLERS =================
+# ================= ADMIN PANEL =================
 @bot.message_handler(commands=['admin'])
 def admin_panel(message):
     if message.chat.id != ADMIN_ID:
@@ -503,12 +495,14 @@ def add_videos(message):
         save_data()
         bot.send_message(chat_id, "✅ Premium Post Added!")
 
-# CATCH-ALL (Jodi keyboard na ashe)
+# Fallback catch-all for verified users
 @bot.message_handler(func=lambda msg: True)
-def unknown_text(message):
+def fallback_handler(message):
     user_id = str(message.chat.id)
     if db["users"].get(user_id, {}).get("verified"):
-        bot.send_message(message.chat.id, "Please use the keyboard below 👇", reply_markup=user_main_keyboard())
+        bot.send_message(message.chat.id, "Please use the menu below 👇", reply_markup=user_main_keyboard())
+    else:
+        check_channels_and_proceed(message.chat.id)
 
 # ================= START BOT =================
 if __name__ == "__main__":
