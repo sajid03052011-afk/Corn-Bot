@@ -21,11 +21,11 @@ app = Flask(__name__)
 # ================= DATABASE =================
 default_data = {
     "users": {},
-    "channels": [], # list of dict: {'id': chat_id, 'link': invite_link}
+    "channels": [], 
     "refer_target": 5,
     "payment": {"email": "", "password": "", "upi": "", "price": "150"},
-    "welcome_text": "<b>Welcome to our Bot! Please verify to continue.</b>",
-    "normal_videos": [], # [{'file_id': '', 'caption': '', 'type': ''}]
+    "welcome_text": "<b>Welcome to our Bot! You are now verified.</b>",
+    "normal_videos": [], 
     "premium_videos": [],
     "auto_post_channel_id": None
 }
@@ -43,38 +43,37 @@ def save_data():
     with open(DATA_FILE, "w") as f:
         json.dump(db, f, indent=4)
 
-# Deletion Queue: [{'chat_id': id, 'msg_id': id, 'time': timestamp}]
 deletion_queue = []
 user_states = {}
 
-# ================= FLASK SERVER (For Render) =================
+# ================= FLASK SERVER =================
 @app.route('/')
 def home():
-    return "Bot is running perfectly! Made by TechPro Sajid."
+    return "Bot is running perfectly!"
 
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
 
-# ================= BACKGROUND WORKER (Auto-delete & Auto-post) =================
+# ================= BACKGROUND WORKER =================
 def background_worker():
     last_post_time = time.time()
     while True:
         current_time = time.time()
         
-        # 1. Auto Delete Messages (older than 30 mins = 1800 sec)
+        # Auto Delete Messages (30 mins = 1800 sec)
         to_remove = []
         for item in deletion_queue:
             if current_time - item['time'] >= 1800:
                 try:
                     bot.delete_message(item['chat_id'], item['msg_id'])
-                except Exception:
+                except:
                     pass
                 to_remove.append(item)
         for item in to_remove:
             deletion_queue.remove(item)
             
-        # 2. Auto Post to Channel (Every 1 hour = 3600 sec)
+        # Auto Post to Channel (Every 1 hour = 3600 sec)
         if current_time - last_post_time >= 3600:
             if db.get("auto_post_channel_id") and len(db["normal_videos"]) >= 3:
                 import random
@@ -85,8 +84,8 @@ def background_worker():
                             bot.send_photo(db["auto_post_channel_id"], vid['file_id'], caption=vid['caption'], parse_mode="HTML")
                         else:
                             bot.send_video(db["auto_post_channel_id"], vid['file_id'], caption=vid['caption'], parse_mode="HTML")
-                    except Exception as e:
-                        print("Auto Post Error:", e)
+                    except:
+                        pass
             last_post_time = current_time
             
         time.sleep(10)
@@ -109,14 +108,12 @@ def check_utr_in_mail(utr):
         if status == "OK" and messages[0]:
             return True
         return False
-    except Exception as e:
-        print("Mail Check Error:", e)
+    except:
         return False
 
 # ================= KEYBOARDS =================
 def user_main_keyboard():
     markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
-    # Buttons BIG Size as requested
     markup.add(
         KeyboardButton("GET VIDEO 🤤🫦"),
         KeyboardButton("GET PREMIUM 👑"),
@@ -141,29 +138,29 @@ def admin_keyboard():
     )
     return markup
 
-# ================= AUTO APPROVE JOIN REQUESTS =================
+# ================= AUTO APPROVE =================
 @bot.chat_join_request_handler()
 def handle_join_request(request):
     try:
         user_id = str(request.from_user.id)
-        # Approve the join request instantly
         bot.approve_chat_join_request(request.chat.id, request.from_user.id)
         
-        # MAGIC FIX: Bot ekhane nije thekei user ke Verified baniye welcome message pathiye dibe!
-        if user_id in db["users"]:
+        if user_id not in db["users"]:
+            db["users"][user_id] = {"premium": False, "refers": 0, "normal_index": 0, "premium_index": 0, "verified": True}
+        else:
             db["users"][user_id]["verified"] = True
-            save_data()
-            bot.send_message(request.from_user.id, "✅ <b>Your join request was approved!</b>", parse_mode="HTML")
-            bot.send_message(request.from_user.id, db["welcome_text"], reply_markup=user_main_keyboard(), parse_mode="HTML")
-    except Exception as e:
-        print(f"Auto-approve error: {e}")
+            
+        save_data()
+        bot.send_message(request.from_user.id, "✅ <b>Your join request was approved!</b>", parse_mode="HTML")
+        bot.send_message(request.from_user.id, db["welcome_text"], reply_markup=user_main_keyboard(), parse_mode="HTML")
+    except:
+        pass
 
-# ================= USER HANDLERS =================
+# ================= VERIFICATION SYSTEM =================
 @bot.message_handler(commands=['start'])
 def start(message):
     user_id = str(message.chat.id)
     
-    # Handle Referral
     if len(message.text.split()) > 1:
         ref_id = message.text.split()[1]
         if ref_id != user_id and user_id not in db["users"]:
@@ -186,23 +183,19 @@ def check_force_join(message):
     user_id = message.chat.id
     not_joined = []
     
-    # Admin ke join verification theke bypass kora hocche
     if str(user_id) == str(ADMIN_ID):
         db["users"][str(user_id)]["verified"] = True
         save_data()
         bot.send_message(user_id, db["welcome_text"], reply_markup=user_main_keyboard(), parse_mode="HTML")
         return
 
-    # Check channels
     for ch in db["channels"]:
         try:
-            # Force Integer cast for chat_id to fix pyTelegramBotAPI String Issue
             chat_id_int = int(ch['id']) 
             status = bot.get_chat_member(chat_id_int, user_id).status
             if status not in ['member', 'administrator', 'creator']:
                 not_joined.append(ch['link'])
-        except Exception as e:
-            print(f"Error checking channel {ch['id']}: {e}")
+        except:
             not_joined.append(ch['link'])
             
     if not_joined:
@@ -220,34 +213,37 @@ def check_force_join(message):
 def verify_join_callback(call):
     user_id = call.message.chat.id
     
-    # Jodi Auto-Approve theke aage thekei Verified hoye thake tahole r check korbe na
     if db["users"].get(str(user_id), {}).get("verified"):
-        bot.delete_message(call.message.chat.id, call.message.message_id)
-        bot.answer_callback_query(call.id, "✅ Verified successfully!")
+        try:
+            bot.delete_message(call.message.chat.id, call.message.message_id)
+        except: pass
+        bot.answer_callback_query(call.id, "✅ Already Verified!")
         bot.send_message(user_id, db["welcome_text"], reply_markup=user_main_keyboard(), parse_mode="HTML")
         return
 
     not_joined = []
     for ch in db["channels"]:
         try:
-            chat_id_int = int(ch['id']) # Force Integer cast
-            status = bot.get_chat_member(chat_id_int, user_id).status
+            status = bot.get_chat_member(int(ch['id']), user_id).status
             if status not in ['member', 'administrator', 'creator']:
                 not_joined.append(ch['link'])
-        except Exception as e:
-            print(f"Error checking channel in verify {ch['id']}: {e}")
+        except:
             not_joined.append(ch['link'])
             
     if not_joined:
         bot.answer_callback_query(call.id, "❌ Not joined yet! If you just sent a request, please wait 5-10 seconds.", show_alert=True)
     else:
-        bot.delete_message(call.message.chat.id, call.message.message_id)
+        try:
+            bot.delete_message(call.message.chat.id, call.message.message_id)
+        except: pass
         db["users"][str(user_id)]["verified"] = True
         save_data()
         bot.answer_callback_query(call.id, "✅ Verified successfully!")
         bot.send_message(user_id, db["welcome_text"], reply_markup=user_main_keyboard(), parse_mode="HTML")
 
-@bot.message_handler(func=lambda msg: msg.text == "GET VIDEO 🤤🫦")
+# ================= USER FEATURES =================
+# Ekhane emoji problem solve kora hoyeche 'in' use kore
+@bot.message_handler(func=lambda msg: msg.text and "GET VIDEO" in msg.text.upper())
 def send_normal_video(message):
     user_id = str(message.chat.id)
     if not db["users"].get(user_id, {}).get("verified"):
@@ -260,7 +256,7 @@ def send_normal_video(message):
         
     idx = db["users"][user_id]["normal_index"]
     if idx >= len(videos):
-        idx = 0 # Reset if all watched
+        idx = 0 
         
     to_send = videos[idx:idx+3]
     db["users"][user_id]["normal_index"] = idx + len(to_send)
@@ -269,14 +265,14 @@ def send_normal_video(message):
     for vid in to_send:
         try:
             if vid['type'] == 'photo':
-                msg = bot.send_photo(message.chat.id, vid['file_id'], caption=vid['caption'] + "\n\n<i>⏳ This message will be deleted in 30 mins</i>", parse_mode="HTML")
+                msg = bot.send_photo(message.chat.id, vid['file_id'], caption=vid['caption'] + "\n\n<i>⏳ Auto delete in 30 mins</i>", parse_mode="HTML")
             else:
-                msg = bot.send_video(message.chat.id, vid['file_id'], caption=vid['caption'] + "\n\n<i>⏳ This message will be deleted in 30 mins</i>", parse_mode="HTML")
+                msg = bot.send_video(message.chat.id, vid['file_id'], caption=vid['caption'] + "\n\n<i>⏳ Auto delete in 30 mins</i>", parse_mode="HTML")
             deletion_queue.append({'chat_id': message.chat.id, 'msg_id': msg.message_id, 'time': time.time()})
         except:
             pass
 
-@bot.message_handler(func=lambda msg: msg.text == "GET PREMIUM 👑")
+@bot.message_handler(func=lambda msg: msg.text and "GET PREMIUM" in msg.text.upper())
 def get_premium(message):
     user_id = str(message.chat.id)
     if not db["users"].get(user_id, {}).get("verified"):
@@ -296,9 +292,9 @@ def get_premium(message):
         
         try:
             if vid['type'] == 'photo':
-                msg = bot.send_photo(message.chat.id, vid['file_id'], caption=vid['caption'] + "\n\n<i>⏳ This message will be deleted in 30 mins</i>", parse_mode="HTML")
+                msg = bot.send_photo(message.chat.id, vid['file_id'], caption=vid['caption'] + "\n\n<i>⏳ Auto delete in 30 mins</i>", parse_mode="HTML")
             else:
-                msg = bot.send_video(message.chat.id, vid['file_id'], caption=vid['caption'] + "\n\n<i>⏳ This message will be deleted in 30 mins</i>", parse_mode="HTML")
+                msg = bot.send_video(message.chat.id, vid['file_id'], caption=vid['caption'] + "\n\n<i>⏳ Auto delete in 30 mins</i>", parse_mode="HTML")
             deletion_queue.append({'chat_id': message.chat.id, 'msg_id': msg.message_id, 'time': time.time()})
         except:
             pass
@@ -312,7 +308,7 @@ def get_premium(message):
 def buy_premium_callback(call):
     upi = db["payment"]["upi"]
     if not upi:
-        bot.answer_callback_query(call.id, "Payment is currently not configured by admin.", show_alert=True)
+        bot.answer_callback_query(call.id, "Payment not configured.", show_alert=True)
         return
         
     qr_url = f"https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=upi://pay?pa={upi}%26pn=Admin"
@@ -323,9 +319,8 @@ def buy_premium_callback(call):
 def process_utr(message):
     utr = message.text.strip()
     chat_id = message.chat.id
-    
     msg_load = bot.send_message(chat_id, "🔄 <i>Verifying your payment... please wait 3 seconds.</i>", parse_mode="HTML")
-    time.sleep(3) # 3 sec loading animation
+    time.sleep(3) 
     
     if check_utr_in_mail(utr):
         db["users"][str(chat_id)]["premium"] = True
@@ -333,10 +328,9 @@ def process_utr(message):
         bot.edit_message_text("✅ <b>Payment Approved! PREMIUM UNLOCKED!</b> 🥳", chat_id, msg_load.message_id, parse_mode="HTML")
         user_states.pop(chat_id, None)
     else:
-        bot.edit_message_text("❌ <b>Payment not found or UTR invalid!</b> Please check and try again.", chat_id, msg_load.message_id, parse_mode="HTML")
-        # Kept in waiting state so user can retry typing UTR
+        bot.edit_message_text("❌ <b>Payment not found or UTR invalid!</b> Please try again.", chat_id, msg_load.message_id, parse_mode="HTML")
 
-@bot.message_handler(func=lambda msg: msg.text == "Refer and get premium 🎁")
+@bot.message_handler(func=lambda msg: msg.text and "REFER" in msg.text.upper())
 def refer_system(message):
     user_id = str(message.chat.id)
     if not db["users"].get(user_id, {}).get("verified"):
@@ -350,13 +344,12 @@ def refer_system(message):
     msg = f"🎁 <b>Refer & Earn Premium!</b>\n\nInvite friends and get premium for FREE!\n\n<b>Your Points:</b> {refers}/{target}\n<b>Your Link:</b> <code>{ref_link}</code>\n\n<i>Share this link with your friends. Once they verify, you get 1 point!</i>"
     bot.send_message(message.chat.id, msg, parse_mode="HTML")
 
-
 # ================= ADMIN HANDLERS =================
 @bot.message_handler(commands=['admin'])
 def admin_panel(message):
     if message.chat.id != ADMIN_ID:
         return
-    bot.send_message(message.chat.id, "🛠 <b>Admin Control Panel</b>\nWelcome TechPro Sajid!", reply_markup=admin_keyboard(), parse_mode="HTML")
+    bot.send_message(message.chat.id, "🛠 <b>Admin Control Panel</b>", reply_markup=admin_keyboard(), parse_mode="HTML")
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("admin_"))
 def admin_callbacks(call):
@@ -365,76 +358,54 @@ def admin_callbacks(call):
         return
         
     action = call.data
-    
     if action == "admin_stats":
         tot_users = len(db["users"])
         prem_users = sum(1 for u in db["users"].values() if u["premium"])
-        tot_normal_vid = len(db["normal_videos"])
-        tot_prem_vid = len(db["premium_videos"])
-        
-        stat_msg = (f"📊 <b>Bot Stats</b>\n\n"
-                    f"👥 Total Users: {tot_users}\n"
-                    f"💎 Premium Users: {prem_users}\n"
-                    f"🎬 Normal Videos: {tot_normal_vid}\n"
-                    f"👑 Premium Videos: {tot_prem_vid}")
-        bot.send_message(chat_id, stat_msg, parse_mode="HTML")
-        
+        bot.send_message(chat_id, f"📊 <b>Bot Stats</b>\n👥 Total Users: {tot_users}\n💎 Premium Users: {prem_users}\n🎬 Normal Videos: {len(db['normal_videos'])}\n👑 Premium Videos: {len(db['premium_videos'])}", parse_mode="HTML")
     elif action == "admin_backup":
-        try:
-            bot.send_document(chat_id, open(DATA_FILE, "rb"))
-        except:
-            bot.send_message(chat_id, "Backup file not found or empty.")
-            
+        try: bot.send_document(chat_id, open(DATA_FILE, "rb"))
+        except: bot.send_message(chat_id, "Backup file not found.")
     elif action == "admin_restore":
         bot.send_message(chat_id, "Send me the backup `bot_data.json` file.", parse_mode="Markdown")
         user_states[chat_id] = "WAITING_RESTORE"
-        
     elif action == "admin_set_welcome":
         bot.send_message(chat_id, "Send the new welcome text (HTML format supported).")
         user_states[chat_id] = "WAITING_WELCOME"
-        
     elif action == "admin_broadcast":
         bot.send_message(chat_id, "Send the message you want to broadcast.")
         user_states[chat_id] = "WAITING_BROADCAST"
-        
     elif action == "admin_add_normal":
-        bot.send_message(chat_id, "Forward normal photos/videos here.\nMake sure they have caption & Flezen app link.\nType /stop when done.")
+        bot.send_message(chat_id, "Forward normal photos/videos here. Type /stop when done.")
         user_states[chat_id] = "WAITING_NORMAL_VIDEOS"
-        
     elif action == "admin_add_premium":
-        bot.send_message(chat_id, "Forward premium photos/videos here.\nType /stop when done.")
+        bot.send_message(chat_id, "Forward premium photos/videos here. Type /stop when done.")
         user_states[chat_id] = "WAITING_PREMIUM_VIDEOS"
-        
     elif action == "admin_payment":
         markup = InlineKeyboardMarkup()
-        markup.add(InlineKeyboardButton("Set Email & App Pass", callback_data="set_pay_email"))
-        markup.add(InlineKeyboardButton("Set UPI ID", callback_data="set_pay_upi"))
+        markup.add(InlineKeyboardButton("Set Email & Pass", callback_data="set_pay_email"), InlineKeyboardButton("Set UPI", callback_data="set_pay_upi"))
         markup.add(InlineKeyboardButton("Set Price", callback_data="set_pay_price"))
         bot.send_message(chat_id, "Manage Payment System:", reply_markup=markup)
-        
     elif action == "admin_refer":
         bot.send_message(chat_id, "Send the number of refers needed for Premium:")
         user_states[chat_id] = "WAITING_REFER_TARGET"
-        
     elif action == "admin_channel":
-        bot.send_message(chat_id, "Send Channel ID and Invite Link separated by space.\nExample: `-1001234567 https://t.me/joinchat/...`\nType /clear to remove all channels.")
+        bot.send_message(chat_id, "Send Channel ID and Invite Link separated by space.\nExample: `-1001234567 https://t.me/joinchat/...`\nType /clear to remove all.")
         user_states[chat_id] = "WAITING_CHANNEL"
-        
     elif action == "admin_set_channel_id":
-        bot.send_message(chat_id, "Forward a message from your target Auto-Post channel so I can save its ID.")
+        bot.send_message(chat_id, "Forward a message from your target Auto-Post channel.")
         user_states[chat_id] = "WAITING_AUTOPOST_CHANNEL"
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("set_pay_"))
 def payment_callbacks(call):
     chat_id = call.message.chat.id
     if call.data == "set_pay_email":
-        bot.send_message(chat_id, "Send Email and App Password separated by space.\nExample: `admin@gmail.com abcdefghijklmnop`", parse_mode="Markdown")
+        bot.send_message(chat_id, "Send Email and App Password separated by space.")
         user_states[chat_id] = "WAITING_PAY_EMAIL"
     elif call.data == "set_pay_upi":
-        bot.send_message(chat_id, "Send your UPI ID (e.g. `9876543210@paytm`)")
+        bot.send_message(chat_id, "Send your UPI ID")
         user_states[chat_id] = "WAITING_PAY_UPI"
     elif call.data == "set_pay_price":
-        bot.send_message(chat_id, "Send Premium Price amount (e.g. `150`)")
+        bot.send_message(chat_id, "Send Premium Price amount")
         user_states[chat_id] = "WAITING_PAY_PRICE"
 
 @bot.message_handler(func=lambda msg: msg.chat.id == ADMIN_ID and user_states.get(msg.chat.id) in ["WAITING_RESTORE", "WAITING_WELCOME", "WAITING_BROADCAST", "WAITING_PAY_EMAIL", "WAITING_PAY_UPI", "WAITING_PAY_PRICE", "WAITING_REFER_TARGET", "WAITING_CHANNEL", "WAITING_AUTOPOST_CHANNEL"])
@@ -446,69 +417,52 @@ def admin_text_inputs(message):
         db["welcome_text"] = message.text
         save_data()
         bot.send_message(chat_id, "✅ Welcome text updated!")
-        
     elif state == "WAITING_REFER_TARGET":
         try:
             db["refer_target"] = int(message.text)
             save_data()
             bot.send_message(chat_id, "✅ Refer target updated!")
-        except:
-            bot.send_message(chat_id, "❌ Please send a valid number.")
-        
+        except: bot.send_message(chat_id, "❌ Valid number required.")
     elif state == "WAITING_PAY_EMAIL":
         parts = message.text.split(maxsplit=1)
         if len(parts) == 2:
             db["payment"]["email"] = parts[0]
             db["payment"]["password"] = parts[1].replace(" ", "")
             save_data()
-            bot.send_message(chat_id, "✅ Email & App Password saved!")
-        else:
-            bot.send_message(chat_id, "❌ Format error. Try again.")
-            
+            bot.send_message(chat_id, "✅ Email & Password saved!")
     elif state == "WAITING_PAY_UPI":
         db["payment"]["upi"] = message.text
         save_data()
         bot.send_message(chat_id, "✅ UPI ID saved!")
-        
     elif state == "WAITING_PAY_PRICE":
         db["payment"]["price"] = message.text
         save_data()
         bot.send_message(chat_id, "✅ Price saved!")
-        
     elif state == "WAITING_CHANNEL":
         if message.text == "/clear":
             db["channels"] = []
             save_data()
-            bot.send_message(chat_id, "✅ All channels cleared!")
+            bot.send_message(chat_id, "✅ Channels cleared!")
         else:
             parts = message.text.split()
             if len(parts) >= 2:
                 db["channels"].append({"id": parts[0], "link": parts[1]})
                 save_data()
-                bot.send_message(chat_id, f"✅ Channel {parts[0]} Added!")
-            else:
-                bot.send_message(chat_id, "❌ Format error. Send ID and Link separated by space.")
-                
+                bot.send_message(chat_id, "✅ Channel Added!")
     elif state == "WAITING_BROADCAST":
-        users = list(db["users"].keys())
         sent = 0
-        bot.send_message(chat_id, "⏳ Broadcasting started...")
-        for u in users:
+        bot.send_message(chat_id, "⏳ Broadcasting...")
+        for u in list(db["users"].keys()):
             try:
                 bot.copy_message(u, chat_id, message.message_id)
                 sent += 1
-            except:
-                pass
-        bot.send_message(chat_id, f"✅ Broadcast complete. Sent to {sent} users.")
-        
+            except: pass
+        bot.send_message(chat_id, f"✅ Broadcast sent to {sent} users.")
     elif state == "WAITING_AUTOPOST_CHANNEL":
         if message.forward_from_chat:
             db["auto_post_channel_id"] = message.forward_from_chat.id
             save_data()
-            bot.send_message(chat_id, f"✅ Auto-post channel set successfully to ID: `{message.forward_from_chat.id}`", parse_mode="Markdown")
-        else:
-            bot.send_message(chat_id, "❌ This is not a forwarded message from a channel. Try again.")
-
+            bot.send_message(chat_id, f"✅ Auto-post channel ID saved.")
     user_states.pop(chat_id, None)
 
 @bot.message_handler(content_types=['document'], func=lambda msg: msg.chat.id == ADMIN_ID and user_states.get(msg.chat.id) == "WAITING_RESTORE")
@@ -516,15 +470,11 @@ def restore_backup(message):
     try:
         file_info = bot.get_file(message.document.file_id)
         downloaded_file = bot.download_file(file_info.file_path)
-        with open(DATA_FILE, 'wb') as new_file:
-            new_file.write(downloaded_file)
-        
+        with open(DATA_FILE, 'wb') as new_file: new_file.write(downloaded_file)
         global db
-        with open(DATA_FILE, "r") as f:
-            db = json.load(f)
-        bot.send_message(ADMIN_ID, "✅ Backup restored successfully!")
-    except Exception as e:
-        bot.send_message(ADMIN_ID, f"❌ Error restoring backup: {e}")
+        with open(DATA_FILE, "r") as f: db = json.load(f)
+        bot.send_message(ADMIN_ID, "✅ Backup restored!")
+    except: bot.send_message(ADMIN_ID, "❌ Restore failed!")
     user_states.pop(ADMIN_ID, None)
 
 @bot.message_handler(content_types=['photo', 'video', 'text'], func=lambda msg: msg.chat.id == ADMIN_ID and user_states.get(msg.chat.id) in ["WAITING_NORMAL_VIDEOS", "WAITING_PREMIUM_VIDEOS"])
@@ -536,30 +486,29 @@ def add_videos(message):
         user_states.pop(chat_id, None)
         bot.send_message(chat_id, "✅ Stopped adding videos.")
         return
-
-    if message.content_type not in ['photo', 'video']:
-        bot.send_message(chat_id, "❌ Please forward only photo or video. Type /stop to end.")
-        return
+    if message.content_type not in ['photo', 'video']: return
 
     file_id = message.photo[-1].file_id if message.content_type == 'photo' else message.video.file_id
     caption = message.caption or ""
 
     if state == "WAITING_NORMAL_VIDEOS":
-        # Extract link using regex
         links = re.findall(r'(https?://[^\s]+)', caption)
         link = links[0] if links else "LINK_NOT_FOUND"
-        
-        # Format the caption as you wanted
         new_caption = f"<b>FULL VIDEO LINK 👇🤤🫦</b>\n\n🔗 {link}\n\n👑 <i>Buy Premium for ADS FREE unlimited videos!</i>"
-        
         db["normal_videos"].append({'type': message.content_type, 'file_id': file_id, 'caption': new_caption})
         save_data()
-        bot.send_message(chat_id, "✅ Normal Post Added! Send next or type /stop")
-        
+        bot.send_message(chat_id, "✅ Normal Post Added!")
     elif state == "WAITING_PREMIUM_VIDEOS":
         db["premium_videos"].append({'type': message.content_type, 'file_id': file_id, 'caption': caption})
         save_data()
-        bot.send_message(chat_id, "✅ Premium Post Added! Send next or type /stop")
+        bot.send_message(chat_id, "✅ Premium Post Added!")
+
+# CATCH-ALL (Jodi keyboard na ashe)
+@bot.message_handler(func=lambda msg: True)
+def unknown_text(message):
+    user_id = str(message.chat.id)
+    if db["users"].get(user_id, {}).get("verified"):
+        bot.send_message(message.chat.id, "Please use the keyboard below 👇", reply_markup=user_main_keyboard())
 
 # ================= START BOT =================
 if __name__ == "__main__":
